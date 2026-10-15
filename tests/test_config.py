@@ -35,6 +35,17 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaises(ConfigurationError):
             settings.validate()
 
+    def test_rejects_short_cron_secret(self) -> None:
+        settings = Settings(
+            supabase_url="https://example.supabase.co",
+            supabase_secret_key="sb_secret_test_only",
+            forecast_job_token="a" * 32,
+            cron_secret="too-short",
+        )
+
+        with self.assertRaises(ConfigurationError):
+            settings.validate()
+
 
 if __name__ == "__main__":
     unittest.main()

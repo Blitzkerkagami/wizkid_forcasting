@@ -19,7 +19,9 @@ Copy `.env.example` to `.env` on the server and set:
 - `SUPABASE_URL`: the same project URL used by Unity;
 - `SUPABASE_SECRET_KEY`: a new `sb_secret_...` key from Supabase project API keys;
 - `FORECAST_JOB_TOKEN`: a random value of at least 32 characters used only by the
-  scheduler or administrator that starts a forecast run.
+  administrator that starts a manual forecast run;
+- `CRON_SECRET`: a different random value of at least 32 characters. Vercel uses
+  this to authenticate automatic scheduled runs.
 
 Never add `.env` to source control, Unity Resources, a mobile build, screenshots, or
 chat messages. The service intentionally sends the secret key only through the
@@ -58,11 +60,19 @@ Content-Type: application/json
 Use `{"player_id":"<uuid>"}` to process one learner, or `{}` to process every
 eligible learner. The command-line equivalent is `python -m app.worker`.
 
-## 4. Deploy and schedule
+## 4. Deploy to Vercel and schedule
 
-The included Dockerfile is ready for a container host. Store all three sensitive
-values as host-managed environment secrets. Schedule one protected `POST
-/forecast/run` call daily. Do not expose the job token to the Unity app.
+Import this repository into Vercel and add every value from `.env.example` under
+**Project Settings > Environment Variables**. Keep `SUPABASE_SECRET_KEY`,
+`FORECAST_JOB_TOKEN`, and `CRON_SECRET` available only to the backend.
+
+`vercel.json` runs `GET /forecast/cron` every day at `01:00 UTC` (`09:00` in the
+Philippines) and allows the function to run for up to 60 seconds. Vercel automatically
+sends `CRON_SECRET` through the `Authorization: Bearer ...` header. Preview deployments
+do not execute this production cron.
+
+The included Dockerfile remains available for other container hosts. It is not needed
+for a normal Vercel Python deployment. Never expose either trigger secret to Unity.
 
 ## Model behavior
 

@@ -19,6 +19,7 @@ class Settings:
     supabase_url: str
     supabase_secret_key: str
     forecast_job_token: str
+    cron_secret: str = ""
     forecast_valid_days: int = 7
     forecast_page_size: int = 500
 
@@ -28,6 +29,7 @@ class Settings:
             supabase_url=os.getenv("SUPABASE_URL", "").strip().rstrip("/"),
             supabase_secret_key=os.getenv("SUPABASE_SECRET_KEY", "").strip(),
             forecast_job_token=os.getenv("FORECAST_JOB_TOKEN", "").strip(),
+            cron_secret=os.getenv("CRON_SECRET", "").strip(),
             forecast_valid_days=_read_int("FORECAST_VALID_DAYS", 7),
             forecast_page_size=_read_int("FORECAST_PAGE_SIZE", 500),
         )
@@ -50,6 +52,10 @@ class Settings:
         if len(self.forecast_job_token) < 32:
             raise ConfigurationError(
                 "FORECAST_JOB_TOKEN must contain at least 32 characters."
+            )
+        if self.cron_secret and len(self.cron_secret) < 32:
+            raise ConfigurationError(
+                "CRON_SECRET must contain at least 32 characters when configured."
             )
         if not 1 <= self.forecast_valid_days <= 30:
             raise ConfigurationError("FORECAST_VALID_DAYS must be between 1 and 30.")
