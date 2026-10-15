@@ -1,16 +1,21 @@
-# WizKid forecasting service (Phase 5B)
+# WizKid ARIMA forecasting service (Phase 5D)
 
-This is a small server-side Python service. It reads only aggregated learner-skill
-features from Supabase, generates an explainable seven-day forecast, and writes the
-result to the protected `learner_forecasts` table. Unity must never receive or call
-the Supabase secret key.
+This server-side Python service reads chronological per-session learner scores from
+Supabase, fits an ARIMA model, generates an explainable seven-day forecast, and
+writes the result to the protected `learner_forecasts` table. Unity must never
+receive or call the Supabase secret key.
 
 ## 1. Apply the database migration
 
 In the Supabase SQL Editor, run:
 
-1. `../supabase/schema/phase5b_forecasting_worker.sql`
-2. `../supabase/tests/phase5b_worker_security_checks.sql`
+After the existing Phase 5B schema, run:
+
+1. `sql/phase5d_arima_forecasting.sql`
+2. `sql/phase5d_arima_security_checks.sql`
+
+The full rollback-based data smoke test remains in the Unity project at
+`supabase/tests/phase5d_arima_smoke.sql`.
 
 ## 2. Create server-only environment values
 
@@ -76,9 +81,15 @@ for a normal Vercel Python deployment. Never expose either trigger secret to Uni
 
 ## Model behavior
 
-`bayesian-recency-v1` combines a conservative Beta prior, overall accuracy, the
-latest ten attempts, recent trend, and timeout rate. Confidence grows with attempts,
-sessions, and usable history. This is a transparent baseline suitable for the first
-data collection period; it should be evaluated against real outcomes before being
-described as predictive AI.
+`arima-session-v1` uses `statsmodels.tsa.arima.model.ARIMA` on chronological session
+scores. A learner-skill pair becomes eligible after at least ten attempts across at
+least five scored sessions. The worker evaluates a small set of non-seasonal ARIMA
+orders and selects the model with the lowest corrected Akaike Information Criterion
+(AICc). The stored snapshot records the selected order, session series, next-session
+forecast, and 80% prediction interval for auditability.
+
+If fewer than five scored sessions exist, no forecast is invented: Supabase reports
+the remaining readiness requirement and Unity displays it. If a candidate fit is
+numerically unstable, the worker tries simpler ARIMA orders and skips the series if
+none produce a finite forecast.
 

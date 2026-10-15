@@ -23,7 +23,7 @@ class FakeRepository:
     def __exit__(self, *_: object) -> None:
         return None
 
-    def iter_eligible_features(self, *, player_id: str | None = None):
+    def iter_eligible_series(self, *, player_id: str | None = None):
         return iter(())
 
     def upsert_forecasts(self, forecasts) -> None:
@@ -49,6 +49,15 @@ class MainApiTests(unittest.TestCase):
         response = self.client.get("/forecast/cron")
 
         self.assertEqual(response.status_code, 401)
+
+    def test_health_reports_arima_model(self) -> None:
+        response = self.client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"status": "ok", "model_version": "arima-session-v1"},
+        )
 
     def test_cron_runs_with_vercel_bearer_secret(self) -> None:
         response = self.client.get(

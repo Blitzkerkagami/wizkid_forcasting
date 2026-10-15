@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
-from app.models import LearnerSkillFeatures
+from app.models import LearnerSkillSeries, SessionPerformance
 from app.predictor import MODEL_VERSION, build_forecast
 
 
@@ -11,36 +12,45 @@ OWNER_ID = "11111111-1111-4111-8111-111111111111"
 PLAYER_ID = "22222222-2222-4222-8222-222222222222"
 
 
-def make_features(**overrides: object) -> LearnerSkillFeatures:
-    values: dict[str, object] = {
-        "owner_id": OWNER_ID,
-        "player_id": PLAYER_ID,
-        "skill": "alphabet-order",
-        "total_attempts": 20,
-        "total_sessions": 3,
-        "correct_attempts": 16,
-        "timed_out_attempts": 1,
-        "overall_accuracy": 0.80,
-        "average_response_time_ms": 2200.0,
-        "average_difficulty": 2.4,
-        "highest_level_attempted": 2,
-        "recent_attempt_count": 10,
-        "recent_accuracy": 0.90,
-        "recent_average_response_time_ms": 1900.0,
-        "previous_attempt_count": 10,
-        "previous_accuracy": 0.70,
-        "accuracy_trend_delta": 0.20,
-        "observed_trend": "improving",
-        "is_forecast_eligible": True,
-    }
-    values.update(overrides)
-    return LearnerSkillFeatures(**values)  # type: ignore[arg-type]
+def make_series(
+    scores: list[float] | None = None,
+    *,
+    highest_level: int = 2,
+) -> LearnerSkillSeries:
+    values = scores or [70.0, 76.0, 82.0, 88.0, 94.0, 100.0]
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    observations: list[SessionPerformance] = []
+    total_correct = 0
+    for index, score in enumerate(values, start=1):
+        correct = round(score / 10.0)
+        total_correct += correct
+        observations.append(
+            SessionPerformance(
+                session_id=str(UUID(int=index)),
+                observed_at=(start + timedelta(days=index)).isoformat(),
+                session_index=index,
+                level=highest_level,
+                attempted_questions=10,
+                correct_answers=correct,
+                score_percent=score,
+            )
+        )
+    return LearnerSkillSeries(
+        owner_id=OWNER_ID,
+        player_id=PLAYER_ID,
+        skill="counting",
+        total_sessions=len(observations),
+        total_attempts=len(observations) * 10,
+        total_correct_answers=total_correct,
+        highest_level_attempted=highest_level,
+        observations=tuple(observations),
+    )
 
 
 class PredictorTests(unittest.TestCase):
-    def test_strong_improving_performance_advances_level(self) -> None:
+    def test_improving_series_uses_arima_and_advances_level(self) -> None:
         forecast = build_forecast(
-            make_features(correct_attempts=18, overall_accuracy=0.90),
+            make_series(),
             generated_at=datetime(2026, 10, 15, tzinfo=timezone.utc),
         )
 
@@ -49,19 +59,13 @@ class PredictorTests(unittest.TestCase):
         self.assertEqual(forecast.risk_level, "low")
         self.assertEqual(forecast.recommended_level, 3)
         self.assertGreaterEqual(forecast.expected_score_percent, 85.0)
+        self.assertEqual(forecast.feature_snapshot["method"], "statsmodels-arima")
+        self.assertEqual(len(forecast.feature_snapshot["arima_order"]), 3)
         self.assertNotIn("owner_id", forecast.feature_snapshot)
 
-    def test_weak_declining_performance_reduces_level(self) -> None:
+    def test_declining_series_reduces_level(self) -> None:
         forecast = build_forecast(
-            make_features(
-                correct_attempts=8,
-                overall_accuracy=0.40,
-                recent_accuracy=0.20,
-                previous_accuracy=0.60,
-                accuracy_trend_delta=-0.40,
-                timed_out_attempts=6,
-                highest_level_attempted=3,
-            ),
+            make_series([75.0, 65.0, 55.0, 45.0, 35.0, 25.0], highest_level=3),
             generated_at=datetime(2026, 10, 15, tzinfo=timezone.utc),
         )
 
@@ -71,25 +75,18 @@ class PredictorTests(unittest.TestCase):
         self.assertGreaterEqual(forecast.mastery_probability, 0.0)
         self.assertLessEqual(forecast.mastery_probability, 1.0)
 
-    def test_small_sample_is_never_overconfident(self) -> None:
-        forecast = build_forecast(
-            make_features(
-                total_attempts=10,
-                total_sessions=2,
-                correct_attempts=10,
-                recent_attempt_count=10,
-                recent_accuracy=1.0,
-                overall_accuracy=1.0,
-                previous_attempt_count=0,
-                previous_accuracy=None,
-                accuracy_trend_delta=None,
-            )
-        )
+    def test_constant_series_is_stable_and_finite(self) -> None:
+        forecast = build_forecast(make_series([80.0] * 8))
 
-        self.assertLess(forecast.confidence, 0.70)
         self.assertEqual(forecast.trend_label, "stable")
+        self.assertAlmostEqual(forecast.expected_score_percent, 80.0, delta=1.0)
+        self.assertGreaterEqual(forecast.confidence, 0.25)
+        self.assertLessEqual(forecast.confidence, 0.95)
+
+    def test_less_than_five_sessions_is_not_forecast(self) -> None:
+        with self.assertRaisesRegex(ValueError, "five scored sessions"):
+            build_forecast(make_series([60.0, 65.0, 70.0, 75.0]))
 
 
 if __name__ == "__main__":
     unittest.main()
-

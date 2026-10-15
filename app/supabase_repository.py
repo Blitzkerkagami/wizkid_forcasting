@@ -6,29 +6,25 @@ from typing import Any
 import httpx
 
 from .config import Settings
-from .models import Forecast, LearnerSkillFeatures
+from .models import Forecast, LearnerSkillSeries
 
 
-FEATURE_COLUMNS = ",".join(
+SERIES_COLUMNS = ",".join(
     (
         "owner_id",
         "player_id",
         "skill",
-        "total_attempts",
+        "session_id",
+        "observed_at",
+        "session_index",
+        "level",
+        "attempted_questions",
+        "correct_answers",
+        "score_percent",
         "total_sessions",
-        "correct_attempts",
-        "timed_out_attempts",
-        "overall_accuracy",
-        "average_response_time_ms",
-        "average_difficulty",
+        "total_attempts",
+        "total_correct_answers",
         "highest_level_attempted",
-        "recent_attempt_count",
-        "recent_accuracy",
-        "recent_average_response_time_ms",
-        "previous_attempt_count",
-        "previous_accuracy",
-        "accuracy_trend_delta",
-        "observed_trend",
         "is_forecast_eligible",
     )
 )
@@ -51,11 +47,10 @@ class SupabaseForecastRepository:
             base_url=f"{settings.supabase_url}/rest/v1/",
             timeout=httpx.Timeout(timeout_seconds),
             headers={
-                # New sb_secret_ keys are supplied only through apikey, never Bearer.
                 "apikey": settings.supabase_secret_key,
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "User-Agent": "WizKid-Forecasting/1.0",
+                "User-Agent": "WizKid-Forecasting/2.0",
             },
             transport=transport,
         )
@@ -69,36 +64,72 @@ class SupabaseForecastRepository:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def iter_eligible_features(
+    def iter_eligible_series(
         self, *, player_id: str | None = None
-    ) -> Iterator[LearnerSkillFeatures]:
+    ) -> Iterator[LearnerSkillSeries]:
+        current_key: tuple[str, str, str] | None = None
+        current_records: list[dict[str, Any]] = []
         offset = 0
+
         while True:
             params: dict[str, str | int] = {
-                "select": FEATURE_COLUMNS,
+                "select": SERIES_COLUMNS,
                 "is_forecast_eligible": "eq.true",
-                "order": "owner_id.asc,player_id.asc,skill.asc",
+                "order": (
+                    "owner_id.asc,player_id.asc,skill.asc,session_index.asc"
+                ),
                 "limit": self._page_size,
                 "offset": offset,
             }
             if player_id is not None:
                 params["player_id"] = f"eq.{player_id}"
 
-            records = self._request_json("GET", "learner_skill_features", params=params)
+            records = self._request_json(
+                "GET", "learner_skill_arima_series", params=params
+            )
             if not isinstance(records, list):
                 raise SupabaseRepositoryError(
-                    "Supabase returned an unexpected forecasting feature response."
+                    "Supabase returned an unexpected ARIMA series response."
                 )
+
             for record in records:
                 if not isinstance(record, dict):
                     raise SupabaseRepositoryError(
-                        "Supabase returned a malformed forecasting feature row."
+                        "Supabase returned a malformed ARIMA series row."
                     )
-                yield LearnerSkillFeatures.from_record(record)
+                try:
+                    key = (
+                        str(record["owner_id"]),
+                        str(record["player_id"]),
+                        str(record["skill"]),
+                    )
+                except KeyError as exc:
+                    raise SupabaseRepositoryError(
+                        "Supabase returned an incomplete ARIMA series row."
+                    ) from exc
+
+                if current_key is not None and key != current_key:
+                    try:
+                        yield LearnerSkillSeries.from_records(current_records)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise SupabaseRepositoryError(
+                            "Supabase returned an invalid ARIMA learner series."
+                        ) from exc
+                    current_records = []
+                current_key = key
+                current_records.append(record)
 
             if len(records) < self._page_size:
                 break
             offset += self._page_size
+
+        if current_records:
+            try:
+                yield LearnerSkillSeries.from_records(current_records)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise SupabaseRepositoryError(
+                    "Supabase returned an invalid ARIMA learner series."
+                ) from exc
 
     def upsert_forecasts(self, forecasts: Sequence[Forecast]) -> None:
         if not forecasts:
@@ -144,4 +175,3 @@ class SupabaseForecastRepository:
             raise SupabaseRepositoryError(
                 "Supabase returned a response that was not valid JSON."
             ) from exc
-

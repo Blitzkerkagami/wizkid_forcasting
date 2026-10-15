@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from app.models import Forecast
 from app.worker import run_forecasts
-from tests.test_predictor import make_features
+from tests.test_predictor import make_series
 
 
 class FakeRepository:
@@ -14,7 +14,7 @@ class FakeRepository:
         self.saved: list[Forecast] = []
         self.requested_player_id: str | None = None
 
-    def iter_eligible_features(self, *, player_id: str | None = None):
+    def iter_eligible_series(self, *, player_id: str | None = None):
         self.requested_player_id = player_id
         return iter(self.rows)
 
@@ -24,7 +24,7 @@ class FakeRepository:
 
 class WorkerTests(unittest.TestCase):
     def test_generates_and_upserts_forecasts(self) -> None:
-        repository = FakeRepository([make_features(), object()])
+        repository = FakeRepository([make_series(), object()])
 
         result = run_forecasts(
             repository,

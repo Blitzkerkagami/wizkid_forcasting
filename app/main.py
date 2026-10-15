@@ -31,7 +31,7 @@ def create_app(
     service_settings = settings or Settings.from_env()
     application = FastAPI(
         title="WizKid Forecasting Service",
-        version="1.0.0",
+        version="2.0.0",
         docs_url=None,
         redoc_url=None,
     )

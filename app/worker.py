@@ -8,14 +8,14 @@ from collections.abc import Iterable
 from typing import Protocol
 from uuid import UUID
 
-from .models import Forecast, LearnerSkillFeatures
+from .models import Forecast, LearnerSkillSeries
 from .predictor import build_forecast
 
 
 class ForecastRepository(Protocol):
-    def iter_eligible_features(
+    def iter_eligible_series(
         self, *, player_id: str | None = None
-    ) -> Iterable[LearnerSkillFeatures]: ...
+    ) -> Iterable[LearnerSkillSeries]: ...
 
     def upsert_forecasts(self, forecasts: list[Forecast]) -> None: ...
 
@@ -40,16 +40,16 @@ def run_forecasts(
     scanned = 0
     skipped = 0
 
-    feature_rows = repository.iter_eligible_features(player_id=normalized_player_id)
-    for features in feature_rows:
+    series_rows = repository.iter_eligible_series(player_id=normalized_player_id)
+    for series in series_rows:
         scanned += 1
-        if not isinstance(features, LearnerSkillFeatures):
+        if not isinstance(series, LearnerSkillSeries):
             skipped += 1
             continue
         try:
             forecasts.append(
                 build_forecast(
-                    features,
+                    series,
                     generated_at=run_time,
                     valid_days=valid_days,
                 )

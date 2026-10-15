@@ -1,5 +1,6 @@
 fastapi>=0.115,<1
 httpx>=0.27,<1
 python-dotenv>=1,<2
+statsmodels>=0.14.5,<0.16
 uvicorn[standard]>=0.30,<1
 

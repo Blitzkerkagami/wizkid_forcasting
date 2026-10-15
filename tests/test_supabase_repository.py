@@ -9,7 +9,31 @@ import httpx
 from app.config import Settings
 from app.predictor import build_forecast
 from app.supabase_repository import SupabaseForecastRepository
-from tests.test_predictor import make_features
+from tests.test_predictor import make_series
+
+
+def series_records() -> list[dict[str, object]]:
+    series = make_series()
+    return [
+        {
+            "owner_id": series.owner_id,
+            "player_id": series.player_id,
+            "skill": series.skill,
+            "session_id": row.session_id,
+            "observed_at": row.observed_at,
+            "session_index": row.session_index,
+            "level": row.level,
+            "attempted_questions": row.attempted_questions,
+            "correct_answers": row.correct_answers,
+            "score_percent": row.score_percent,
+            "total_sessions": series.total_sessions,
+            "total_attempts": series.total_attempts,
+            "total_correct_answers": series.total_correct_answers,
+            "highest_level_attempted": series.highest_level_attempted,
+            "is_forecast_eligible": True,
+        }
+        for row in series.observations
+    ]
 
 
 class SupabaseRepositoryTests(unittest.TestCase):
@@ -22,41 +46,22 @@ class SupabaseRepositoryTests(unittest.TestCase):
         )
         self.settings.validate()
 
-    def test_secret_is_apikey_only_and_feature_row_is_parsed(self) -> None:
+    def test_secret_is_apikey_only_and_series_is_grouped(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             self.assertEqual(request.headers["apikey"], "sb_secret_test_only")
             self.assertNotIn("authorization", request.headers)
+            self.assertEqual(request.url.path, "/rest/v1/learner_skill_arima_series")
             self.assertEqual(request.url.params["is_forecast_eligible"], "eq.true")
-            record = {
-                "owner_id": "11111111-1111-4111-8111-111111111111",
-                "player_id": "22222222-2222-4222-8222-222222222222",
-                "skill": "alphabet-order",
-                "total_attempts": 20,
-                "total_sessions": 3,
-                "correct_attempts": 16,
-                "timed_out_attempts": 1,
-                "overall_accuracy": 0.8,
-                "average_response_time_ms": 2200,
-                "average_difficulty": 2.4,
-                "highest_level_attempted": 2,
-                "recent_attempt_count": 10,
-                "recent_accuracy": 0.9,
-                "recent_average_response_time_ms": 1900,
-                "previous_attempt_count": 10,
-                "previous_accuracy": 0.7,
-                "accuracy_trend_delta": 0.2,
-                "observed_trend": "improving",
-                "is_forecast_eligible": True,
-            }
-            return httpx.Response(200, json=[record])
+            return httpx.Response(200, json=series_records())
 
         with SupabaseForecastRepository(
             self.settings, transport=httpx.MockTransport(handler)
         ) as repository:
-            rows = list(repository.iter_eligible_features())
+            rows = list(repository.iter_eligible_series())
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].skill, "alphabet-order")
+        self.assertEqual(rows[0].skill, "counting")
+        self.assertEqual(rows[0].scores, [70.0, 76.0, 82.0, 88.0, 94.0, 100.0])
 
     def test_upsert_uses_idempotency_columns(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -71,11 +76,12 @@ class SupabaseRepositoryTests(unittest.TestCase):
             )
             payload = json.loads(request.content)
             self.assertEqual(len(payload), 1)
+            self.assertEqual(payload[0]["model_version"], "arima-session-v1")
             self.assertNotIn("forecast_id", payload[0])
             return httpx.Response(201)
 
         forecast = build_forecast(
-            make_features(),
+            make_series(),
             generated_at=datetime(2026, 10, 15, tzinfo=timezone.utc),
         )
         with SupabaseForecastRepository(
@@ -86,4 +92,3 @@ class SupabaseRepositoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

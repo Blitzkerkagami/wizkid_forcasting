@@ -1,103 +1,134 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime
+from typing import Any, Sequence
 from uuid import UUID
 
 
-def _bounded_fraction(value: Any, field_name: str) -> float:
-    number = float(value)
-    if not 0.0 <= number <= 1.0:
-        raise ValueError(f"{field_name} must be between 0 and 1")
-    return number
+def _clean_skill(value: Any) -> str:
+    skill = " ".join(str(value).split())
+    if not 1 <= len(skill) <= 80:
+        raise ValueError("skill must contain between 1 and 80 characters")
+    return skill
 
 
 @dataclass(frozen=True, slots=True)
-class LearnerSkillFeatures:
+class SessionPerformance:
+    session_id: str
+    observed_at: str
+    session_index: int
+    level: int
+    attempted_questions: int
+    correct_answers: int
+    score_percent: float
+
+    @classmethod
+    def from_record(cls, record: dict[str, Any]) -> "SessionPerformance":
+        observation = cls(
+            session_id=str(UUID(str(record["session_id"]))),
+            observed_at=str(record["observed_at"]),
+            session_index=int(record["session_index"]),
+            level=int(record["level"]),
+            attempted_questions=int(record["attempted_questions"]),
+            correct_answers=int(record["correct_answers"]),
+            score_percent=float(record["score_percent"]),
+        )
+        observation.validate()
+        return observation
+
+    def validate(self) -> None:
+        if self.session_index < 1:
+            raise ValueError("session_index must be positive")
+        if not 1 <= self.level <= 5:
+            raise ValueError("level must be between 1 and 5")
+        if self.attempted_questions < 1:
+            raise ValueError("attempted_questions must be positive")
+        if not 0 <= self.correct_answers <= self.attempted_questions:
+            raise ValueError("correct_answers is inconsistent with attempts")
+        if not 0.0 <= self.score_percent <= 100.0:
+            raise ValueError("score_percent must be between 0 and 100")
+        datetime.fromisoformat(self.observed_at.replace("Z", "+00:00"))
+
+
+@dataclass(frozen=True, slots=True)
+class LearnerSkillSeries:
     owner_id: str
     player_id: str
     skill: str
-    total_attempts: int
     total_sessions: int
-    correct_attempts: int
-    timed_out_attempts: int
-    overall_accuracy: float
-    average_response_time_ms: float
-    average_difficulty: float
+    total_attempts: int
+    total_correct_answers: int
     highest_level_attempted: int
-    recent_attempt_count: int
-    recent_accuracy: float
-    recent_average_response_time_ms: float
-    previous_attempt_count: int
-    previous_accuracy: float | None
-    accuracy_trend_delta: float | None
-    observed_trend: str
-    is_forecast_eligible: bool
+    observations: tuple[SessionPerformance, ...]
 
     @classmethod
-    def from_record(cls, record: dict[str, Any]) -> "LearnerSkillFeatures":
-        owner_id = str(UUID(str(record["owner_id"])))
-        player_id = str(UUID(str(record["player_id"])))
-        skill = " ".join(str(record["skill"]).split())
-        if not 1 <= len(skill) <= 80:
-            raise ValueError("skill must contain between 1 and 80 characters")
+    def from_records(
+        cls, records: Sequence[dict[str, Any]]
+    ) -> "LearnerSkillSeries":
+        if not records:
+            raise ValueError("an ARIMA series requires at least one record")
 
-        overall_accuracy = _bounded_fraction(
-            record["overall_accuracy"], "overall_accuracy"
-        )
-        recent_accuracy = _bounded_fraction(
-            record.get("recent_accuracy", overall_accuracy), "recent_accuracy"
-        )
-        previous_raw = record.get("previous_accuracy")
-        previous_accuracy = (
-            None
-            if previous_raw is None
-            else _bounded_fraction(previous_raw, "previous_accuracy")
-        )
-        trend_raw = record.get("accuracy_trend_delta")
-        trend_delta = None if trend_raw is None else float(trend_raw)
+        first = records[0]
+        owner_id = str(UUID(str(first["owner_id"])))
+        player_id = str(UUID(str(first["player_id"])))
+        skill = _clean_skill(first["skill"])
+        total_sessions = int(first["total_sessions"])
+        total_attempts = int(first["total_attempts"])
+        total_correct_answers = int(first["total_correct_answers"])
+        highest_level = int(first["highest_level_attempted"])
 
-        features = cls(
+        observations: list[SessionPerformance] = []
+        for record in records:
+            if (
+                str(UUID(str(record["owner_id"]))) != owner_id
+                or str(UUID(str(record["player_id"]))) != player_id
+                or _clean_skill(record["skill"]) != skill
+            ):
+                raise ValueError("ARIMA records mix different learner-skill series")
+            if (
+                int(record["total_sessions"]) != total_sessions
+                or int(record["total_attempts"]) != total_attempts
+                or int(record["total_correct_answers"]) != total_correct_answers
+                or int(record["highest_level_attempted"]) != highest_level
+            ):
+                raise ValueError("ARIMA series metadata is inconsistent")
+            if not bool(record["is_forecast_eligible"]):
+                raise ValueError("row does not meet ARIMA eligibility rules")
+            observations.append(SessionPerformance.from_record(record))
+
+        observations.sort(key=lambda item: item.session_index)
+        series = cls(
             owner_id=owner_id,
             player_id=player_id,
             skill=skill,
-            total_attempts=int(record["total_attempts"]),
-            total_sessions=int(record["total_sessions"]),
-            correct_attempts=int(record["correct_attempts"]),
-            timed_out_attempts=int(record["timed_out_attempts"]),
-            overall_accuracy=overall_accuracy,
-            average_response_time_ms=float(record["average_response_time_ms"]),
-            average_difficulty=float(record["average_difficulty"]),
-            highest_level_attempted=int(record["highest_level_attempted"]),
-            recent_attempt_count=int(record["recent_attempt_count"]),
-            recent_accuracy=recent_accuracy,
-            recent_average_response_time_ms=float(
-                record["recent_average_response_time_ms"]
-            ),
-            previous_attempt_count=int(record["previous_attempt_count"]),
-            previous_accuracy=previous_accuracy,
-            accuracy_trend_delta=trend_delta,
-            observed_trend=str(record.get("observed_trend", "insufficient_history")),
-            is_forecast_eligible=bool(record["is_forecast_eligible"]),
+            total_sessions=total_sessions,
+            total_attempts=total_attempts,
+            total_correct_answers=total_correct_answers,
+            highest_level_attempted=highest_level,
+            observations=tuple(observations),
         )
-        features.validate()
-        return features
+        series.validate()
+        return series
 
     def validate(self) -> None:
-        if self.total_attempts < 1:
-            raise ValueError("total_attempts must be positive")
-        if not 0 <= self.correct_attempts <= self.total_attempts:
-            raise ValueError("correct_attempts is inconsistent with total_attempts")
-        if not 0 <= self.timed_out_attempts <= self.total_attempts:
-            raise ValueError("timed_out_attempts is inconsistent with total_attempts")
-        if self.total_sessions < 1:
-            raise ValueError("total_sessions must be positive")
+        if self.total_sessions < 5 or len(self.observations) < 5:
+            raise ValueError("ARIMA forecasting requires at least five scored sessions")
+        if len(self.observations) != self.total_sessions:
+            raise ValueError("session rows are incomplete")
+        if self.total_attempts < 10:
+            raise ValueError("ARIMA forecasting requires at least ten attempts")
+        if not 0 <= self.total_correct_answers <= self.total_attempts:
+            raise ValueError("total correct answers are inconsistent with attempts")
         if not 1 <= self.highest_level_attempted <= 5:
             raise ValueError("highest_level_attempted must be between 1 and 5")
-        if self.average_response_time_ms < 0 or self.recent_average_response_time_ms < 0:
-            raise ValueError("response times cannot be negative")
-        if not self.is_forecast_eligible:
-            raise ValueError("row does not meet the forecasting eligibility rule")
+        expected_indexes = list(range(1, len(self.observations) + 1))
+        if [row.session_index for row in self.observations] != expected_indexes:
+            raise ValueError("ARIMA session indexes must be contiguous")
+
+    @property
+    def scores(self) -> list[float]:
+        return [row.score_percent for row in self.observations]
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,4 +167,3 @@ class Forecast:
             "recommendation": self.recommendation,
             "feature_snapshot": self.feature_snapshot,
         }
-
